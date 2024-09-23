@@ -1,172 +1,93 @@
 # Network_analysis-tool
-import sys
-import logging
-from scapy.all import *
-import pandas as pd
-from tabulate import tabulate
-from tqdm import tqdm
 
-# Set up logging
-logging.basicConfig(level=logging.INFO, format='%(message)s')
-logger = logging.getLogger(__name__)
+This Python script is built to help analyze and monitor network traffic by reading a PCAP file. It can detect security threats like **port scanning**, **ARP spoofing**, and **DNS spoofing**. The script makes use of **Scapy** for packet analysis, **pandas** for working with data, and logs its findings to help you keep track of what’s going on.
 
-arp_cache = {}
-dns_cache = {}
+ Key Features:
 
-def read_pcap(pcap_file):
-    try:
-        packets = rdpcap(pcap_file)
-    except FileNotFoundError:
-        logger.error(f"PCAP file not found: {pcap_file}")
-        sys.exit(1)
-    except Scapy_Exception as e:
-        logger.error(f"Error reading PCAP file: {e}")
-        sys.exit(1)
-    return packets
+1. **Libraries Used**:
+   - **sys**: For handling system-level stuff like exiting the program if things go wrong.
+   - **logging**: To log important info and warnings so we can keep an eye on things.
+   - **Scapy**: The core tool that lets us read, process, and manipulate network packets from the PCAP file.
+   - **pandas**: Organizes packet data into neat tables so we can analyze it easily.
+   - **tabulate**: Helps print out the data in a clean, readable table format.
+   - **tqdm**: Adds a nice progress bar so you know how long the packet processing will take.
 
-def extract_packet_data(packets):
-    packet_data = []
+---
 
-    for packet in tqdm(packets, desc="Processing packets", unit="packet"):
-        if IP in packet:
-            src_ip = packet[IP].src
-            dst_ip = packet[IP].dst
-            protocol = packet[IP].proto
-            size = len(packet)
-            packet_data.append({"src_ip": src_ip, "dst_ip": dst_ip, "protocol": protocol, "size": size})
+### Function Breakdown:
 
-    return pd.DataFrame(packet_data)
+1. **`read_pcap(pcap_file)`**:
+   - Reads the PCAP file using Scapy’s `rdpcap()` function. If the file’s missing or there's an error, it logs an error and stops the program.
 
-def protocol_name(number):
-    protocol_dict = {1: 'ICMP', 6: 'TCP', 17: 'UDP'}
-    return protocol_dict.get(number, f"Unknown({number})")
+2. **`extract_packet_data(packets)`**:
+   - Pulls out key info like source IP, destination IP, protocol type, and packet size. All this data gets stored in a pandas DataFrame for easy analysis.
 
-def analyze_packet_data(df):
-    total_bandwidth = df["size"].sum()
-    protocol_counts = df["protocol"].value_counts(normalize=True) * 100
-    protocol_counts.index = protocol_counts.index.map(protocol_name)
+3. **`protocol_name(number)`**:
+   - Translates protocol numbers (like TCP = 6, UDP = 17) into names we recognize like TCP, UDP, or ICMP.
 
-    ip_communication = df.groupby(["src_ip", "dst_ip"]).size().sort_values(ascending=False)
-    ip_communication_percentage = ip_communication / ip_communication.sum() * 100
-    ip_communication_table = pd.concat([ip_communication, ip_communication_percentage], axis=1).reset_index()
+4. **`analyze_packet_data(df)`**:
+   - This is the core of the analysis. It calculates:
+     - **Total Bandwidth**: Adds up the size of all packets.
+     - **Protocol Distribution**: How much of the traffic is TCP, UDP, ICMP, etc.
+     - **IP Communication Patterns**: Looks for the busiest IP pairs (who’s talking to whom the most).
+     - **Protocol Frequency**: Counts how many times each protocol shows up.
+   - It returns this data, which we’ll later print out.
 
-    protocol_frequency = df["protocol"].value_counts()
-    protocol_frequency.index = protocol_frequency.index.map(protocol_name)
+5. **`extract_packet_data_security(packets)`**:
+   - Same as `extract_packet_data()`, but it also logs destination ports, which is key for detecting **port scans**.
 
-    protocol_counts_df = pd.concat([protocol_frequency, protocol_counts], axis=1).reset_index()
-    protocol_counts_df.columns = ["Protocol", "Count", "Percentage"]
+6. **`detect_port_scanning(df, port_scan_threshold)`**:
+   - This checks for port scanning behavior. If an IP is sending packets to a lot of different ports, more than a set threshold, it could be up to something fishy like a port scan.
 
-    ip_communication_protocols = df.groupby(["src_ip", "dst_ip", "protocol"]).size().reset_index()
-    ip_communication_protocols.columns = ["Source IP", "Destination IP", "Protocol", "Count"]
-    ip_communication_protocols["Protocol"] = ip_communication_protocols["Protocol"].apply(protocol_name)
+7. **`detect_arp_spoof(packet)`**:
+   - Looks for signs of **ARP spoofing**. If an IP address shows up with a new MAC address, we’ll raise a red flag.
 
-    logger.info(f"IP Communication Protocols DataFrame:\n{ip_communication_protocols.head()}")  # Debug info
-    logger.info(f"Grouped DataFrame shape: {ip_communication_protocols.shape}")  # Debug info
+8. **`detect_dns_spoof(packet)`**:
+   - Watches out for **DNS spoofing** by checking if a domain suddenly resolves to a new IP address, which could be suspicious.
 
-    ip_communication_protocols["Percentage"] = (
-        ip_communication_protocols.groupby(["Source IP", "Destination IP"])["Count"]
-        .transform(lambda x: x / x.sum() * 100)
-    )
+9. **`print_results()`**:
+   - Once all the analysis is done, it prints the results:
+     - Total bandwidth used.
+     - Protocol breakdown.
+     - Who’s talking to who (IP communication patterns).
 
-    return total_bandwidth, protocol_counts_df, ip_communication_table, protocol_frequency, ip_communication_protocols
+10. **`main()`**:
+    - The main function that ties everything together:
+      - Reads the PCAP file.
+      - Extracts and analyzes both traffic data and security data.
+      - Detects any possible threats.
+      - Prints out all the results for you.
 
-def extract_packet_data_security(packets):
-    packet_data = []
+---
 
-    for packet in tqdm(packets, desc="Processing packets for port scanning activity", unit="packet"):
-        if IP in packet:
-            src_ip = packet[IP].src
-            dst_ip = packet[IP].dst
-            protocol = packet[IP].proto
-            size = len(packet)
+### How It Works:
 
-            if TCP in packet:
-                dst_port = packet[TCP].dport
-            else:
-                dst_port = 0
+1. **Step 1: Read the PCAP File**:
+   - The script kicks off by reading the provided **PCAP** file. This file contains all the network traffic data that’s been captured.
 
-            packet_data.append({"src_ip": src_ip, "dst_ip": dst_ip, "protocol": protocol, "size": size, "dst_port": dst_port})
+2. **Step 2: Extract & Analyze the Data**:
+   - **Data Extraction**: Pulls out the key details from the network packets like source/destination IPs, the protocol used (TCP, UDP, etc.), and the size of each packet.
+   - **Data Analysis**: 
+     - Calculates total bandwidth usage.
+     - Identifies the most common protocols in the traffic.
+     - Highlights which IPs are communicating the most.
 
-    return pd.DataFrame(packet_data)
+3. **Step 3: Detect Security Issues**:
+   - **Port Scanning Detection**: Checks if any IP addresses are trying to communicate with a lot of different ports, which could be a sign of port scanning.
+   - **ARP Spoofing Detection**: For ARP packets, it watches for IP addresses being tied to different MAC addresses than usual.
+   - **DNS Spoofing Detection**: Keeps an eye out for domain names that start resolving to different IP addresses.
 
-def detect_port_scanning(df, port_scan_threshold):
-    # Group packets by source IP and destination port
-    port_scan_df = df.groupby(['src_ip', 'dst_port']).size().reset_index(name='count')
-    
-    # Count the unique ports for each source IP
-    unique_ports_per_ip = port_scan_df.groupby('src_ip').size().reset_index(name='unique_ports')
-    
-    # Check for a large number of packets to different ports on a single IP address
-    potential_port_scanners = unique_ports_per_ip[unique_ports_per_ip['unique_ports'] >= port_scan_threshold]
-    ip_addresses = potential_port_scanners['src_ip'].unique()
-    
-    if len(ip_addresses) > 0:
-        logger.warning(f"Potential port scanning detected from IP addresses: {', '.join(ip_addresses)}")
+4. **Step 4: Print the Results**:
+   - Finally, the script prints out the total bandwidth used, protocol distribution, and the top IP communications in a clean table format.
 
-def detect_arp_spoof(packet):
-    if ARP in packet and packet[ARP].op == 2:  # ARP reply
-        src_ip = packet[ARP].psrc
-        src_mac = packet[ARP].hwsrc
-        
-        # Check if IP is already associated with a different MAC
-        if src_ip in arp_cache and arp_cache[src_ip] != src_mac:
-            logger.warning(f"ARP Spoofing detected! IP {src_ip} is now associated with MAC {src_mac} (previously {arp_cache[src_ip]})")
-        else:
-            arp_cache[src_ip] = src_mac
+---
 
-def detect_dns_spoof(packet):
-    if packet.haslayer(DNS) and packet[DNS].an:
-        domain = packet[DNS].qd.qname.decode("utf-8")
-        ip = packet[DNS].an.rdata
+### Use Cases:
+- **Network Traffic Analysis**: Get a clear view of your network’s bandwidth, protocol use, and IP communication patterns.
+- **Port Scanning Detection**: Spot malicious activity where someone might be scanning your network for open ports.
+- **Spoofing Detection**: Keep an eye out for **ARP** or **DNS spoofing** attacks that can lead to serious security issues.
 
-        # Detect if domain is associated with multiple IPs
-        if domain in dns_cache and dns_cache[domain] != ip:
-            logger.warning(f"DNS Spoofing detected! Domain {domain} resolved to {ip} (previously {dns_cache[domain]})")
-        else:
-            dns_cache[domain] = ip
+### Conclusion:
+This tool is great for not only understanding your network traffic but also for detecting potential threats. Whether it’s catching a **port scan** or **spoofing attempts**, it’s got your back for making sure your network stays secure.
 
-def print_results(total_bandwidth, protocol_counts_df, ip_communication_table, protocol_frequency, ip_communication_protocols):
-    # Convert bandwidth to Mbps or Gbps
-    if total_bandwidth < 10**9:
-        bandwidth_unit = "Mbps"
-        total_bandwidth /= 10**6
-    else:
-        bandwidth_unit = "Gbps"
-        total_bandwidth /= 10**9
-
-    logger.info(f"Total bandwidth used: {total_bandwidth:.2f} {bandwidth_unit}")
-    logger.info("\nProtocol Distribution:\n")
-    logger.info(tabulate(protocol_counts_df, headers=["Protocol", "Count", "Percentage"], tablefmt="grid"))
-    logger.info("\nTop IP Address Communications:\n")
-    logger.info(tabulate(ip_communication_table, headers=["Source IP", "Destination IP", "Count", "Percentage"], tablefmt="grid", floatfmt=".2f"))
-
-    logger.info("\nShare of each protocol between IPs:\n")
-    logger.info(tabulate(ip_communication_protocols, headers=["Source IP", "Destination IP", "Protocol", "Count", "Percentage"], tablefmt="grid", floatfmt=".2f"))
-
-def main(pcap_file, port_scan_threshold):
-    packets = read_pcap(pcap_file)
-    df = extract_packet_data(packets)
-    total_bandwidth, protocol_counts, ip_communication_table, protocol_frequency, ip_communication_protocols = analyze_packet_data(df)
-    print_results(total_bandwidth, protocol_counts, ip_communication_table, protocol_frequency, ip_communication_protocols)
-
-    df_security = extract_packet_data_security(packets)
-    detect_port_scanning(df_security, port_scan_threshold)
-
-if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        logger.error("Please provide the path to the PCAP file.")
-        sys.exit(1)
-    
-    pcap_file = sys.argv[1]
-    default_port_scan_threshold = 100
-
-    if len(sys.argv) >= 3:
-        try:
-            port_scan_threshold = int(sys.argv[2])
-        except ValueError:
-            logger.error("Invalid port_scan_threshold value. Using the default value.")
-            port_scan_threshold = default_port_scan_threshold
-    else:
-        port_scan_threshold = default_port_scan_threshold
-
-    main(pcap_file, port_scan_threshold)
+--- 
